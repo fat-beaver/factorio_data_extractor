@@ -4,7 +4,11 @@ use regex::Regex;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let file_contents = read_files()?;
-    let mut prototypes: Vec<String> = file_contents.iter().map(|file| process_file(file)).flatten().collect();
+    let prototypes: Result<Vec<_>, _> = file_contents
+        .iter()
+        .map(|file| process_file(file))
+        .collect();
+    let prototypes: Vec<String> = prototypes?.into_iter().flatten().collect();
     //add recipes and assembling machines to their own lists and discard the other prototypes
     let mut recipes = Vec::new();
     let mut assemblers = Vec::new();
@@ -38,17 +42,17 @@ fn read_files() -> Result<Vec<String>, Box<dyn Error>> {
     Ok(contents?)
 }
 
-fn process_file(contents: &str) -> Vec<String> {
+fn process_file(contents: &str) -> Result<Vec<String>, Box<dyn Error>> {
     let stripped_contents = remove_comments(contents);
-    let data_sections: Vec<String> = extract_data_sections(stripped_contents);
+    let data_sections: Vec<String> = find_data_sections(&stripped_contents)?;
     println!("{} sections found in file", data_sections.len());
     let prototypes: Vec<String> = data_sections
-        .into_iter()
-        .map(process_data_section)
+        .iter()
+        .map(|s| process_data_section(s))
         .flatten()
         .collect();
     println!("{} prototypes read from file", prototypes.len());
-    prototypes
+    Ok(prototypes)
 }
 
 fn remove_comments(string: &str) -> String {
@@ -114,10 +118,10 @@ fn get_matching_bracket((open, close): (char, char), string: &str, start: usize)
             return None;
         }
 
-        match chars[i] {
-            open => depth += 1,
-            close => depth -= 1,
-            _ => (),
+        if chars[i] == open {
+            depth += 1
+        } else if chars[i] == close {
+            depth -= 1
         }
 
         if depth == 0 {
