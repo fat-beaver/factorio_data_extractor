@@ -149,7 +149,6 @@ fn find_prototype_type(prototype: &String) -> String {
             prototype_type.truncate(i-1);
             break;
         }
-        //remove the quotes
     }
     for (i, section_char) in prototype_type.chars().enumerate() {
         //get rid of the first quote and everything before it
