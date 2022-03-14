@@ -75,7 +75,7 @@ fn remove_line_comment(string: &str) -> String {
     let mut line_start = None;
 
     for (i, _) in string.match_indices("--") {
-        if i > string.len() - 3 {
+        if i > string.len() - 4 {
             line_start = Some(i);
             break;
         }
