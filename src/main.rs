@@ -1,14 +1,14 @@
-use std::fs;
+use std::{error::Error, fs};
 
-fn main() {
-    //list of all files to open
-    let files = vec![String::from("prototypes/entity/entities.lua"),
-                     String::from("prototypes/recipe.lua")];
-    let mut prototypes = Vec::new();
-    //get all of the prototypes from each file
-    for file in files {
-        prototypes.append(&mut read_in_file(&file));
-    }
+use regex::Regex;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let file_contents = read_files()?;
+    let prototypes: Result<Vec<_>, _> = file_contents
+        .iter()
+        .map(|file| process_file(file))
+        .collect();
+    let prototypes: Vec<String> = prototypes?.into_iter().flatten().collect();
     //add recipes and assembling machines to their own lists and discard the other prototypes
     let mut recipes = Vec::new();
     let mut assemblers = Vec::new();
@@ -20,133 +20,158 @@ fn main() {
             assemblers.push(prototype);
         }
     }
-    println!("found {} recipes and {} assembling machines", recipes.len(), assemblers.len());
+    println!(
+        "found {} recipes and {} assembling machines",
+        recipes.len(),
+        assemblers.len()
+    );
+
+    Ok(())
 }
-fn read_in_file(filename: &String) -> Vec<String> {
-    //read the file and remove all comments to get it ready for processing
-    let prototype_string = remove_comments(&fs::read_to_string(filename).expect("Could not read file"));
-    //find the data sections, split them apart from each other, and discard the rest
-    let data_sections = find_data_sections(&prototype_string);
+
+fn read_files() -> Result<Vec<String>, Box<dyn Error>> {
+    let files = vec![
+        String::from("prototypes/entity/entities.lua"),
+        String::from("prototypes/recipe.lua"),
+    ];
+
+    let contents: Result<Vec<_>, _> = files
+        .iter()
+        .map(|filename| fs::read_to_string(filename))
+        .collect();
+    Ok(contents?)
+}
+
+fn process_file(contents: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let stripped_contents = remove_comments(contents);
+    let data_sections: Vec<String> = find_data_sections(&stripped_contents)?;
     println!("{} sections found in file", data_sections.len());
-    //read the individual prototypes from each section
-    let mut prototypes = Vec::new();
-    for data_section in data_sections {
-        prototypes.append(&mut read_data_section(&data_section));
-    }
+    let prototypes: Vec<String> = data_sections
+        .iter()
+        .map(|s| process_data_section(s))
+        .flatten()
+        .collect();
     println!("{} prototypes read from file", prototypes.len());
-    return prototypes;
+    Ok(prototypes)
 }
 
-fn remove_comments(commented_prototype_string: &String) -> String {
-    let mut commented_lines = Vec::new();
-    let mut lines = Vec::new();
-
-    for line in commented_prototype_string.lines() {
-        commented_lines.push(String::from(line));
-    }
-    //check for block comments, these are a bit difficult
-    let mut line_number = 0;
-    while line_number != commented_lines.len() {
-        let current_line = commented_lines.get(line_number).unwrap();
-        //check if the line ends with two hyphens, indicating the end of a block comment
-        if current_line.contains("--") && current_line.find("--").unwrap() == current_line.len() - 2 {
-            //find the start of said block comment
-            let mut block_open_found = false;
-            let mut line_number_to_check = line_number;
-            while !block_open_found {
-                line_number_to_check -= 1;
-                let line_to_check = commented_lines.get(line_number_to_check).unwrap();
-                if line_to_check.contains("--") {
-                    block_open_found = true;
-                }
-            }
-            //remove the block comment
-            while line_number_to_check <= line_number {
-
-                commented_lines.remove(line_number_to_check);
-                line_number -= 1;
-            }
+fn remove_comments(string: &str) -> String {
+    // fuck yeah turbofish
+    let mut contents: String = string
+        .lines()
+        .map(remove_line_comment)
+        .collect::<Vec<String>>()
+        .join("\n");
+    loop {
+        let edited_contents = remove_first_block_comment(&contents);
+        if contents == edited_contents {
+            break edited_contents;
         }
-        line_number += 1;
+        contents = edited_contents;
     }
-    line_number = 0;
-    //remove normal comments too
-    while line_number != commented_lines.len() {
-        let mut current_line = commented_lines.get(line_number).unwrap().clone();
-        if current_line.contains("--") {
-            current_line.truncate(current_line.find("--").unwrap());
-        }
-        lines.push(current_line);
-        line_number += 1;
-    }
-    //collect all of the lines back into one string and return it
-    let prototype_string = lines.join("\n");
-    return prototype_string;
 }
 
-fn find_data_sections(file_contents: &String) -> Vec<String> {
-    let mut file_contents_raw = file_contents.clone();
-    //remove all whitespace
-    file_contents_raw.retain(|c| !c.is_whitespace());
-    let mut sections: Vec<String> = Vec::new();
-    while file_contents_raw.contains("data:extend(") {
-        let file_contents = file_contents_raw.split_off(file_contents_raw.find("data:extend(").unwrap() + "data:extend".len());
-        //keep track of how deep we are in brackets to find the end of the data:extend section
-        let mut bracket_depth = 0;
-        for (i, current_char) in file_contents.chars().enumerate() {
-            //change the bracket depth if either type is present
-            if current_char.eq(&'(') {
-                bracket_depth += 1;
-            } else if current_char.eq(&')') {
-                bracket_depth -= 1;
-            }
-            //if not inside any brackets this must be the end of a section, so split it out
-            if bracket_depth == 0 {
-                let mut data_section = file_contents.clone();
-                file_contents_raw = data_section.split_off(i);
-                sections.push(data_section);
-                break;
-            }
+fn remove_line_comment(string: &str) -> String {
+    let mut line_start = None;
+
+    for (i, _) in string.match_indices("--") {
+        if i > string.len() - 4 {
+            line_start = Some(i);
+            break;
+        }
+
+        if &string[i + 2..i + 4] != "[[" {
+            line_start = Some(i);
+            break;
         }
     }
-    return sections;
+
+    match line_start {
+        Some(i) => string.split_at(i).0.to_owned(),
+        None => string.to_owned(),
+    }
 }
 
-fn read_data_section(data_section: &String) -> Vec<String> {
-    let mut prototype_data_raw = data_section.clone();
-    let mut prototypes = Vec::new();
-    //remove the starting and ending normal brackets
-    prototype_data_raw.truncate(prototype_data_raw.len() - 1);
-    let prototype_data = prototype_data_raw.split_off(2);
-    let mut bracket_depth = 0;
-    //keep track of the last split location so that the recipes before and after the current one can be cut off
-    let mut last_split = 0;
-    for (i, current_char) in prototype_data.chars().enumerate() {
-        //change the bracket depth if either type is present
-        if current_char.eq(&'{') {
-            bracket_depth += 1;
-        } else if current_char.eq(&'}') {
-            bracket_depth -= 1;
-        //if the current position is not inside brackets and is a comma which splits recipes, find the recipe string
+fn remove_first_block_comment(string: &str) -> String {
+    let re = Regex::new(r"--\[\[.*?]]").unwrap();
+
+    match re.find(string) {
+        Some(m) => {
+            let mut string = string.to_owned();
+            string.replace_range(m.range(), "");
+            string
         }
-        if bracket_depth == 0 {
-            if last_split < i {
-                let mut data_temp = prototype_data.clone();
-                data_temp.truncate(i);
-                let data_section = data_temp.split_off(last_split);
-                prototypes.push(data_section);
-            }
-            last_split = i + 1;
+        None => string.to_owned(),
+    }
+}
+
+// assumes that string[start] == "("
+fn get_matching_bracket((open, close): (char, char), string: &str, start: usize) -> Option<usize> {
+    let mut depth = 1;
+    let mut i = start;
+    let chars: Vec<char> = string.chars().collect();
+
+    loop {
+        i += 1;
+
+        if i >= chars.len() {
+            return None;
+        }
+
+        if chars[i] == open {
+            depth += 1
+        } else if chars[i] == close {
+            depth -= 1
+        }
+
+        if depth == 0 {
+            return Some(i);
         }
     }
-    return prototypes;
 }
+
+fn find_data_sections(file_contents: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut file_contents = file_contents.replace(char::is_whitespace, "");
+    let mut sections: Vec<String> = vec![];
+
+    while let Some(start) = file_contents.find("data:extend(") {
+        let paren_start = start + "data:extend".len();
+
+        let end = get_matching_bracket(('(', ')'), &file_contents, paren_start)
+            .ok_or("Unmatched parens")?;
+        sections.push(file_contents[paren_start..end].to_owned());
+        file_contents.replace_range(start..end, "");
+    }
+
+    Ok(sections)
+}
+
+fn process_data_section(section: &str) -> Vec<String> {
+    let mut section = section[1..section.len() - 1].to_owned();
+    let mut prototypes: Vec<String> = vec![];
+
+    while let Some(start) = section.find("{") {
+        let end = match get_matching_bracket(('{', '}'), &section, start) {
+            Some(i) => i,
+            None => {
+                section = section[1..].to_owned();
+                continue;
+            }
+        };
+
+        prototypes.push(section[start..end].to_owned());
+        section.replace_range(start..end, "");
+    }
+
+    prototypes
+}
+
 fn find_prototype_type(prototype: &String) -> String {
     let mut prototype_type = prototype.clone();
     for (i, section_char) in prototype.chars().enumerate() {
         //find the first comma and split the string to remove the second quote, the comma, and everything after it
         if section_char.eq(&',') {
-            prototype_type.truncate(i-1);
+            prototype_type.truncate(i - 1);
             break;
         }
     }
