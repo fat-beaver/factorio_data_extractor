@@ -1,4 +1,6 @@
-use std::fs;
+use std::{error::Error, fs};
+
+use regex::Regex;
 
 fn main() {
     //list of all files to open
@@ -28,10 +30,36 @@ fn main() {
         assemblers.len()
     );
 }
-fn read_in_file(filename: &String) -> Vec<String> {
+
+fn read_files() -> Result<Vec<String>, Box<dyn Error>> {
+    let files = vec![
+        String::from("prototypes/entity/entities.lua"),
+        String::from("prototypes/recipe.lua"),
+    ];
+
+    let contents: Result<Vec<_>, _> = files
+        .iter()
+        .map(|filename| fs::read_to_string(filename))
+        .collect();
+    Ok(contents?)
+}
+
+fn process_file(contents: &str) -> Vec<String> {
+    let stripped_contents = remove_comments(contents);
+    let data_sections: Vec<String> = extract_data_sections(stripped_contents);
+    println!("{} sections found in file", data_sections.len());
+    let prototypes: Vec<String> = data_sections
+        .into_iter()
+        .map(process_data_section)
+        .flatten()
+        .collect();
+    println!("{} prototypes read from file", prototypes.len());
+    prototypes
+}
+
+fn read_in_file(filename: &String) -> Result<Vec<String>, Box<dyn Error>> {
     //read the file and remove all comments to get it ready for processing
-    let prototype_string =
-        remove_comments(&fs::read_to_string(filename).expect("Could not read file"));
+    let prototype_string = remove_comments(&fs::read_to_string(filename)?);
     //find the data sections, split them apart from each other, and discard the rest
     let data_sections = find_data_sections(&prototype_string);
     println!("{} sections found in file", data_sections.len());
@@ -41,54 +69,53 @@ fn read_in_file(filename: &String) -> Vec<String> {
         prototypes.append(&mut read_data_section(&data_section));
     }
     println!("{} prototypes read from file", prototypes.len());
-    return prototypes;
+    Ok(prototypes)
 }
 
-fn remove_comments(commented_prototype_string: &String) -> String {
-    let mut commented_lines = Vec::new();
-    let mut lines = Vec::new();
+fn remove_comments(string: &str) -> String {
+    // fuck yeah turbofish
+    let mut contents: String = string.lines().map(remove_line_comment).collect::<Vec<String>>().join("\n");
+    loop {
+        let edited_contents = remove_first_block_comment(&contents);
+        if contents == edited_contents {
+            break edited_contents
+        }
+        contents = edited_contents;
+    }
+} 
 
-    for line in commented_prototype_string.lines() {
-        commented_lines.push(String::from(line));
-    }
-    //check for block comments, these are a bit difficult
-    let mut line_number = 0;
-    while line_number != commented_lines.len() {
-        let current_line = commented_lines.get(line_number).unwrap();
-        //check if the line ends with two hyphens, indicating the end of a block comment
-        if current_line.contains("--") && current_line.find("--").unwrap() == current_line.len() - 2
-        {
-            //find the start of said block comment
-            let mut block_open_found = false;
-            let mut line_number_to_check = line_number;
-            while !block_open_found {
-                line_number_to_check -= 1;
-                let line_to_check = commented_lines.get(line_number_to_check).unwrap();
-                if line_to_check.contains("--") {
-                    block_open_found = true;
-                }
-            }
-            //remove the block comment
-            while line_number_to_check <= line_number {
-                commented_lines.remove(line_number_to_check);
-                line_number -= 1;
-            }
+fn remove_line_comment(string: &str) -> String {
+    let mut line_start = None;
+
+    for (i, _) in string.match_indices("--") {
+        if i > string.len() - 3 {
+            line_start = Some(i);
+            break;
         }
-        line_number += 1;
-    }
-    line_number = 0;
-    //remove normal comments too
-    while line_number != commented_lines.len() {
-        let mut current_line = commented_lines.get(line_number).unwrap().clone();
-        if current_line.contains("--") {
-            current_line.truncate(current_line.find("--").unwrap());
+
+        if &string[i + 2..i + 4] != "[[" {
+            line_start = Some(i);
+            break;
         }
-        lines.push(current_line);
-        line_number += 1;
     }
-    //collect all of the lines back into one string and return it
-    let prototype_string = lines.join("\n");
-    return prototype_string;
+
+    match line_start {
+        Some(i) => string.split_at(i).0.to_owned(),
+        None => string.to_owned(),
+    }
+}
+
+fn remove_first_block_comment(string: &str) -> String {
+    let re = Regex::new(r"--\[\[.*?]]").unwrap();
+
+    match re.find(string) {
+        Some(m) => {
+            let mut string = string.to_owned();
+            string.replace_range(m.range(), "");
+            string
+        }
+        None => string.to_owned(),
+    }
 }
 
 fn find_data_sections(file_contents: &String) -> Vec<String> {
