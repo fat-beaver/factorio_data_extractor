@@ -2,8 +2,10 @@ use std::fs;
 
 fn main() {
     //list of all files to open
-    let files = vec![String::from("prototypes/entity/entities.lua"),
-                     String::from("prototypes/recipe.lua")];
+    let files = vec![
+        String::from("prototypes/entity/entities.lua"),
+        String::from("prototypes/recipe.lua"),
+    ];
     let mut prototypes = Vec::new();
     //get all of the prototypes from each file
     for file in files {
@@ -20,11 +22,16 @@ fn main() {
             assemblers.push(prototype);
         }
     }
-    println!("found {} recipes and {} assembling machines", recipes.len(), assemblers.len());
+    println!(
+        "found {} recipes and {} assembling machines",
+        recipes.len(),
+        assemblers.len()
+    );
 }
 fn read_in_file(filename: &String) -> Vec<String> {
     //read the file and remove all comments to get it ready for processing
-    let prototype_string = remove_comments(&fs::read_to_string(filename).expect("Could not read file"));
+    let prototype_string =
+        remove_comments(&fs::read_to_string(filename).expect("Could not read file"));
     //find the data sections, split them apart from each other, and discard the rest
     let data_sections = find_data_sections(&prototype_string);
     println!("{} sections found in file", data_sections.len());
@@ -49,7 +56,8 @@ fn remove_comments(commented_prototype_string: &String) -> String {
     while line_number != commented_lines.len() {
         let current_line = commented_lines.get(line_number).unwrap();
         //check if the line ends with two hyphens, indicating the end of a block comment
-        if current_line.contains("--") && current_line.find("--").unwrap() == current_line.len() - 2 {
+        if current_line.contains("--") && current_line.find("--").unwrap() == current_line.len() - 2
+        {
             //find the start of said block comment
             let mut block_open_found = false;
             let mut line_number_to_check = line_number;
@@ -62,7 +70,6 @@ fn remove_comments(commented_prototype_string: &String) -> String {
             }
             //remove the block comment
             while line_number_to_check <= line_number {
-
                 commented_lines.remove(line_number_to_check);
                 line_number -= 1;
             }
@@ -90,7 +97,8 @@ fn find_data_sections(file_contents: &String) -> Vec<String> {
     file_contents_raw.retain(|c| !c.is_whitespace());
     let mut sections: Vec<String> = Vec::new();
     while file_contents_raw.contains("data:extend(") {
-        let file_contents = file_contents_raw.split_off(file_contents_raw.find("data:extend(").unwrap() + "data:extend".len());
+        let file_contents = file_contents_raw
+            .split_off(file_contents_raw.find("data:extend(").unwrap() + "data:extend".len());
         //keep track of how deep we are in brackets to find the end of the data:extend section
         let mut bracket_depth = 0;
         for (i, current_char) in file_contents.chars().enumerate() {
@@ -127,7 +135,7 @@ fn read_data_section(data_section: &String) -> Vec<String> {
             bracket_depth += 1;
         } else if current_char.eq(&'}') {
             bracket_depth -= 1;
-        //if the current position is not inside brackets and is a comma which splits recipes, find the recipe string
+            //if the current position is not inside brackets and is a comma which splits recipes, find the recipe string
         }
         if bracket_depth == 0 {
             if last_split < i {
@@ -146,7 +154,7 @@ fn find_prototype_type(prototype: &String) -> String {
     for (i, section_char) in prototype.chars().enumerate() {
         //find the first comma and split the string to remove the second quote, the comma, and everything after it
         if section_char.eq(&',') {
-            prototype_type.truncate(i-1);
+            prototype_type.truncate(i - 1);
             break;
         }
     }
