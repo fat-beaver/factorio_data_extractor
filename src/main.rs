@@ -2,17 +2,9 @@ use std::{error::Error, fs};
 
 use regex::Regex;
 
-fn main() {
-    //list of all files to open
-    let files = vec![
-        String::from("prototypes/entity/entities.lua"),
-        String::from("prototypes/recipe.lua"),
-    ];
-    let mut prototypes = Vec::new();
-    //get all of the prototypes from each file
-    for file in files {
-        prototypes.append(&mut read_in_file(&file));
-    }
+fn main() -> Result<(), Box<dyn Error>> {
+    let file_contents = read_files()?;
+    let mut prototypes: Vec<String> = file_contents.iter().map(|file| process_file(file)).flatten().collect();
     //add recipes and assembling machines to their own lists and discard the other prototypes
     let mut recipes = Vec::new();
     let mut assemblers = Vec::new();
@@ -29,6 +21,8 @@ fn main() {
         recipes.len(),
         assemblers.len()
     );
+
+    Ok(())
 }
 
 fn read_files() -> Result<Vec<String>, Box<dyn Error>> {
@@ -57,32 +51,21 @@ fn process_file(contents: &str) -> Vec<String> {
     prototypes
 }
 
-fn read_in_file(filename: &String) -> Result<Vec<String>, Box<dyn Error>> {
-    //read the file and remove all comments to get it ready for processing
-    let prototype_string = remove_comments(&fs::read_to_string(filename)?);
-    //find the data sections, split them apart from each other, and discard the rest
-    let data_sections = find_data_sections(&prototype_string);
-    println!("{} sections found in file", data_sections.len());
-    //read the individual prototypes from each section
-    let mut prototypes = Vec::new();
-    for data_section in data_sections {
-        prototypes.append(&mut read_data_section(&data_section));
-    }
-    println!("{} prototypes read from file", prototypes.len());
-    Ok(prototypes)
-}
-
 fn remove_comments(string: &str) -> String {
     // fuck yeah turbofish
-    let mut contents: String = string.lines().map(remove_line_comment).collect::<Vec<String>>().join("\n");
+    let mut contents: String = string
+        .lines()
+        .map(remove_line_comment)
+        .collect::<Vec<String>>()
+        .join("\n");
     loop {
         let edited_contents = remove_first_block_comment(&contents);
         if contents == edited_contents {
-            break edited_contents
+            break edited_contents;
         }
         contents = edited_contents;
     }
-} 
+}
 
 fn remove_line_comment(string: &str) -> String {
     let mut line_start = None;
@@ -118,64 +101,67 @@ fn remove_first_block_comment(string: &str) -> String {
     }
 }
 
-fn find_data_sections(file_contents: &String) -> Vec<String> {
-    let mut file_contents_raw = file_contents.clone();
-    //remove all whitespace
-    file_contents_raw.retain(|c| !c.is_whitespace());
-    let mut sections: Vec<String> = Vec::new();
-    while file_contents_raw.contains("data:extend(") {
-        let file_contents = file_contents_raw
-            .split_off(file_contents_raw.find("data:extend(").unwrap() + "data:extend".len());
-        //keep track of how deep we are in brackets to find the end of the data:extend section
-        let mut bracket_depth = 0;
-        for (i, current_char) in file_contents.chars().enumerate() {
-            //change the bracket depth if either type is present
-            if current_char.eq(&'(') {
-                bracket_depth += 1;
-            } else if current_char.eq(&')') {
-                bracket_depth -= 1;
-            }
-            //if not inside any brackets this must be the end of a section, so split it out
-            if bracket_depth == 0 {
-                let mut data_section = file_contents.clone();
-                file_contents_raw = data_section.split_off(i);
-                sections.push(data_section);
-                break;
-            }
+// assumes that string[start] == "("
+fn get_matching_bracket((open, close): (char, char), string: &str, start: usize) -> Option<usize> {
+    let mut depth = 1;
+    let mut i = start;
+    let chars: Vec<char> = string.chars().collect();
+
+    loop {
+        i += 1;
+
+        if i >= chars.len() {
+            return None;
+        }
+
+        match chars[i] {
+            open => depth += 1,
+            close => depth -= 1,
+            _ => (),
+        }
+
+        if depth == 0 {
+            return Some(i);
         }
     }
-    return sections;
 }
 
-fn read_data_section(data_section: &String) -> Vec<String> {
-    let mut prototype_data_raw = data_section.clone();
-    let mut prototypes = Vec::new();
-    //remove the starting and ending normal brackets
-    prototype_data_raw.truncate(prototype_data_raw.len() - 1);
-    let prototype_data = prototype_data_raw.split_off(2);
-    let mut bracket_depth = 0;
-    //keep track of the last split location so that the recipes before and after the current one can be cut off
-    let mut last_split = 0;
-    for (i, current_char) in prototype_data.chars().enumerate() {
-        //change the bracket depth if either type is present
-        if current_char.eq(&'{') {
-            bracket_depth += 1;
-        } else if current_char.eq(&'}') {
-            bracket_depth -= 1;
-            //if the current position is not inside brackets and is a comma which splits recipes, find the recipe string
-        }
-        if bracket_depth == 0 {
-            if last_split < i {
-                let mut data_temp = prototype_data.clone();
-                data_temp.truncate(i);
-                let data_section = data_temp.split_off(last_split);
-                prototypes.push(data_section);
-            }
-            last_split = i + 1;
-        }
+fn find_data_sections(file_contents: &str) -> Result<Vec<String>, Box<dyn Error>> {
+    let mut file_contents = file_contents.replace(char::is_whitespace, "");
+    let mut sections: Vec<String> = vec![];
+
+    while let Some(start) = file_contents.find("data:extend(") {
+        let paren_start = start + "data:extend".len();
+
+        let end = get_matching_bracket(('(', ')'), &file_contents, paren_start)
+            .ok_or("Unmatched parens")?;
+        sections.push(file_contents[paren_start..end].to_owned());
+        file_contents.replace_range(start..end, "");
     }
-    return prototypes;
+
+    Ok(sections)
 }
+
+fn process_data_section(section: &str) -> Vec<String> {
+    let mut section = section[1..section.len() - 1].to_owned();
+    let mut prototypes: Vec<String> = vec![];
+
+    while let Some(start) = section.find("{") {
+        let end = match get_matching_bracket(('{', '}'), &section, start) {
+            Some(i) => i,
+            None => {
+                section = section[1..].to_owned();
+                continue;
+            }
+        };
+
+        prototypes.push(section[start..end].to_owned());
+        section.replace_range(start..end, "");
+    }
+
+    prototypes
+}
+
 fn find_prototype_type(prototype: &String) -> String {
     let mut prototype_type = prototype.clone();
     for (i, section_char) in prototype.chars().enumerate() {
